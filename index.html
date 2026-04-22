@@ -2191,8 +2191,13 @@ function nowTime(){const d=new Date();return d.getHours()+':'+(String(d.getMinut
 function isAdmin(grp,id){
   if(!grp||!grp.admins)return false;
   const myId=(S.session&&S.session.userId)||'me';
-  // Check by given id, also check 'me' and actual userId
-  return grp.admins.includes(id)||grp.admins.includes('me')||grp.admins.includes(myId)||grp.createdBy===myId||grp.createdBy==='me';
+  // Check specific id passed in
+  if(grp.admins.includes(id))return true;
+  // If checking 'me' or current user — check all forms
+  if(id==='me'||id===myId){
+    return grp.admins.includes('me')||grp.admins.includes(myId)||grp.createdBy===myId||grp.createdBy==='me';
+  }
+  return false;
 }
 function isMe(id){return id==='me';}
 function maskPhone(ph){return ph?'•••• •••• ••'+ph.slice(-2):'••••••••••';}
@@ -3386,12 +3391,15 @@ function renderMsgs(msgs){
         break;
       }
       case 'video': {
-        const vidOk=m.src&&m.src.length>10&&m.src!=='[vid_lost]'&&m.src!=='[media]';
+        // Accept: data URLs, https Supabase storage URLs, blob URLs
+        const vidSrc=m.sbUrl||m.src||'';
+        const vidOk=vidSrc&&vidSrc.length>10&&vidSrc!=='[vid_lost]'&&vidSrc!=='[media]';
+        const safeVidSrc=vidOk?vidSrc.replace(/'/g,"\\'"):'';
         content=`${replyQuote}
-          <div class="bub-vid-wrap" onclick="${vidOk?`openMV('video','${m.src}')`:'toast(\"🎬 Video — page reload-ல் available இல்லை\")'}">
+          <div class="bub-vid-wrap" onclick="${vidOk?`openMV('video','${safeVidSrc}')`:'toast(\"🎬 Video upload-ல் உள்ளது — internet connection check செய்யவும்\")'}">
             ${vidOk
-              ? `<video src="${m.src}" style="width:240px;height:160px;object-fit:cover;border-radius:10px;display:block" muted preload="metadata"></video>`
-              : `<div style="width:240px;height:160px;background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px"><div style="font-size:40px">🎬</div><div style="font-size:11px;color:rgba(255,255,255,.6)">Tap to play</div></div>`
+              ? `<video src="${vidSrc}" style="width:240px;height:160px;object-fit:cover;border-radius:10px;display:block" muted preload="metadata" playsinline></video>`
+              : `<div style="width:240px;height:160px;background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px"><div style="font-size:40px">🎬</div><div style="font-size:11px;color:rgba(255,255,255,.6)">Video processing...</div></div>`
             }
             <div class="bub-vid-play"><div class="bub-vid-play-btn">▶</div></div>
           </div>
@@ -4094,7 +4102,12 @@ function renderGroupInfo(grp){
     if(isAdminM)badges+=`<span class="badge-admin">👑 ADMIN</span>`;
     let actions='';
     if(amIAdmin&&!isMeM){
-      if(!isAdminM)actions+=`<button class="mem-act-btn mem-act-promote" title="Make Admin" onclick="promptPromote('${m.id}','${dispName}','${m.phone||''}')">👑</button>`;
+      if(!isAdminM){
+        actions+=`<button class="mem-act-btn mem-act-promote" title="Make Admin" onclick="promptPromote('${m.id}','${dispName}','${m.phone||''}')">👑</button>`;
+      } else {
+        // Already admin — show demote button
+        actions+=`<button class="mem-act-btn" title="Remove Admin" onclick="demoteAdmin('${m.id}','${dispName}')" style="background:rgba(240,180,41,.15);color:#f0b429;width:32px;height:32px;border-radius:50%;border:none;font-size:15px;cursor:pointer">👑✕</button>`;
+      }
       if(!isCreator)actions+=`<button class="mem-act-btn mem-act-remove" title="Remove" onclick="promptRemove('${m.id}','${dispName}')">🚫</button>`;
     }
     if(!isMeM)actions+=`<button class="mem-act-btn mem-act-msg" title="Message" onclick="msgMember('${m.id}')">💬</button>`;
@@ -4262,10 +4275,22 @@ function confirmPromote(){
   if(!grp.admins.includes(S.pendingPromote)){
     grp.admins.push(S.pendingPromote);
     saveGroups();
-    toast('👑 Admin promoted! அவர் phone number இப்போது visible ஆகும்');
+    toast('👑 Admin promoted!');
   }
   S.pendingPromote=null;S.pendingPromotePhone=null;
   closeConfirm('co-promote');renderGroupInfo(grp);
+}
+
+function demoteAdmin(mid,mname){
+  const grp=S.curGroup;if(!grp)return;
+  if(!confirm(mname+'-ஐ Admin-இல் இருந்து remove செய்யவா?'))return;
+  grp.admins=grp.admins.filter(function(a){return a!==mid;});
+  saveGroups();
+  if(fbReady()){
+    sbClient.from('groups').upsert({id:grp.id,admins:grp.admins},{onConflict:'id'}).catch(function(){});
+  }
+  toast('👑 '+mname+' Admin-இல் இருந்து removed!');
+  renderGroupInfo(grp);
 }
 
 // ── REMOVE MEMBER ──
@@ -4310,13 +4335,15 @@ function leaveGroup(gid){
 
 function deleteGroup(gid){
   if(!confirm('இந்த group-ஐ delete செய்யவா? Recover முடியாது!'))return;
+  // Remove from GROUPS array
+  GROUPS=GROUPS.filter(function(g){return g.id!==gid;});
+  // Save updated array to localStorage immediately
+  try{localStorage.setItem('vst_groups',JSON.stringify(GROUPS));}catch(e){}
   // Delete from Supabase
   if(fbReady()){
     sbClient.from('groups').delete().eq('id',gid).catch(function(){});
     sbClient.from('messages').delete().eq('chat_id',gid).catch(function(){});
   }
-  GROUPS=GROUPS.filter(function(g){return g.id!==gid;});
-  saveGroups();
   renderChatList();
   toast('🗑️ Group deleted!');
   closePage('pg-grpinfo');
@@ -4421,56 +4448,82 @@ function renderMemSelList(filter=''){
 
 let _creatingGroup=false;
 function createGroup(){
-  if(_creatingGroup)return; // prevent double-tap duplicate
+  if(_creatingGroup)return;
   const nm=document.getElementById('cgNm').value.trim();
   const desc=document.getElementById('cgDesc').value.trim();
   if(!nm){toast('⚠️ Group name கொடுக்கவும்!');return;}
   _creatingGroup=true;
   const btn=document.getElementById('cgCreateBtn');
   if(btn){btn.disabled=true;btn.querySelector('.bt').textContent='⏳ Creating...';}
+
   const myId=(S.session&&S.session.userId)||'me';
   const myName=(S.session&&S.session.displayName)||'Me';
   const myPhone=(S.session&&S.session.phone)||'';
   const me={id:myId,name:myName,emoji:'😊',color:'135deg,#25d366,#128c7e',phone:myPhone,isMe:true};
-  const members=[me,...selMembers.map(function(sid){const c=CONTACTS.find(function(x){return x.id===sid;});return c?{id:c.id,name:c.name,emoji:c.emoji,color:c.color,phone:c.phone}:null;}).filter(Boolean)];
+  const members=[me,...selMembers.map(function(sid){
+    const c=CONTACTS.find(function(x){return x.id===sid;});
+    return c?{id:c.id,name:c.name,emoji:c.emoji,color:c.color,phone:c.phone}:null;
+  }).filter(Boolean)];
+
   const grpId='g_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
   const inviteToken=grpId+'_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8);
-  const colorVal=selColor.replace('linear-gradient(','').replace(')','');
+  // Fix colorVal — handle both "linear-gradient(...)" and plain "135deg,..." formats
+  let colorVal=selColor;
+  if(colorVal.startsWith('linear-gradient(')){
+    colorVal=colorVal.replace('linear-gradient(','').replace(/\)$/,'');
+  }
+
+  const systemMsg={id:Date.now(),from:'System',fromId:'sys',out:false,
+    text:'🎉 '+nm+' group உருவாக்கப்பட்டது! வரவேற்கிறோம்.',
+    time:nowTime(),tick:'r',type:'text'};
+
   const grp={
-    id:grpId,name:nm,emoji:selIcon,
-    color:colorVal,
-    desc:desc||'',createdBy:myId,admins:[myId],members:members,
-    messages:[{id:Date.now(),from:'System',fromId:'sys',out:false,
-      text:'🎉 '+nm+' group உருவாக்கப்பட்டது! வரவேற்கிறோம்.',
-      time:nowTime(),tick:'r',type:'text'}],
-    lastMsg:'🎉 Group created!',lastTime:nowTime(),unread:0,pinned:false,
+    id:grpId,name:nm,emoji:selIcon,color:colorVal,
+    desc:desc||'',
+    createdBy:myId,
+    admins:[myId],  // ✅ only creator is admin — NOT all members
+    members:members,
+    messages:[systemMsg],
+    lastMsg:'🎉 Group created!',lastTime:nowTime(),
+    unread:0,pinned:false,
     inviteToken:inviteToken,
-    createdAt:Date.now(),
+    createdAt:Date.now()
   };
+
   GROUPS.unshift(grp);
   saveGroups();
-  // Save to Supabase for cross-device invite join
+
+  // Supabase save
   if(fbReady()){
     sbClient.from('groups').upsert({
-      id:grpId,name:nm,emoji:selIcon,
-      color:colorVal,description:desc||'',
-      created_by:myId,admins:[myId],
+      id:grpId,name:nm,emoji:selIcon,color:colorVal,
+      description:desc||'',created_by:myId,
+      admins:[myId],
       member_ids:members.map(function(m){return m.id;}),
       members:members,
       invite_token:inviteToken,
       last_msg:'🎉 Group created!',last_time:fbTS()
     },{onConflict:'id'}).catch(function(){});
   }
+
   selMembers=[];
   renderChatList();
+
+  // Reset button immediately
+  _creatingGroup=false;
+  if(btn){btn.disabled=false;btn.querySelector('.bt').textContent='✅ Create Group';}
+
+  // Close page first, then open chat
   closePage('pg-creategrp');
   toast('✅ "'+nm+'" group '+members.length+' members-உடன் உருவாக்கப்பட்டது!');
+
   setTimeout(function(){
-    _creatingGroup=false;
-    if(btn){btn.disabled=false;btn.querySelector('.bt').textContent='✅ Create Group';}
-    openChat({id:grp.id,type:'group',name:grp.name,emoji:grp.emoji,color:grp.color,
-      lastMsg:grp.lastMsg,lastTime:grp.lastTime,unread:0,messages:grp.messages,groupRef:grp});
-  },600);
+    openChat({
+      id:grp.id,type:'group',name:grp.name,emoji:grp.emoji,
+      color:grp.color,lastMsg:grp.lastMsg,lastTime:grp.lastTime,
+      unread:0,messages:grp.messages,groupRef:grp
+    });
+  },350);
 }
 
 // ── STATUS VIEWER ──
@@ -5373,38 +5426,42 @@ let COMMUNITIES=JSON.parse(localStorage.getItem('vst_communities')||'[]');
 function saveCommunities(){try{localStorage.setItem('vst_communities',JSON.stringify(COMMUNITIES));}catch(e){}}
 
 function openCreateCommunity(){
-  // Build community create modal dynamically
   const existing=document.getElementById('mo-community');
   if(existing)existing.remove();
   const ov=document.createElement('div');
   ov.id='mo-community';
   ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;display:flex;align-items:flex-end;backdrop-filter:blur(2px)';
-  ov.innerHTML=`
-  <div style="width:100%;background:#fff;border-radius:20px 20px 0 0;padding:24px 18px 32px;max-height:85vh;overflow-y:auto">
-    <div style="display:flex;align-items:center;margin-bottom:18px">
-      <div style="font-family:'Syne',sans-serif;font-size:18px;font-weight:700;flex:1">👥 New Community</div>
-      <button onclick="document.getElementById('mo-community').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#667781">✕</button>
-    </div>
-    <div style="margin-bottom:14px">
-      <div style="font-size:11px;font-family:'Space Mono',monospace;color:#667781;margin-bottom:6px;letter-spacing:.5px">COMMUNITY NAME</div>
-      <input type="text" id="commNm" placeholder="Community name உள்ளிடவும்" maxlength="50"
-        style="width:100%;background:#f0f2f5;border:1.5px solid #e9edef;border-radius:12px;padding:12px 14px;font-size:15px;outline:none;font-family:'Noto Sans Tamil',sans-serif;color:#111b21">
-    </div>
-    <div style="margin-bottom:14px">
-      <div style="font-size:11px;font-family:'Space Mono',monospace;color:#667781;margin-bottom:6px;letter-spacing:.5px">DESCRIPTION</div>
-      <input type="text" id="commDesc" placeholder="Community பற்றி சொல்லுங்கள்..." maxlength="100"
-        style="width:100%;background:#f0f2f5;border:1.5px solid #e9edef;border-radius:12px;padding:12px 14px;font-size:15px;outline:none;font-family:'Noto Sans Tamil',sans-serif;color:#111b21">
-    </div>
-    <div style="margin-bottom:16px">
-      <div style="font-size:11px;font-family:'Space Mono',monospace;color:#667781;margin-bottom:8px;letter-spacing:.5px">GROUPS சேர்க்கவும்</div>
-      <div id="commGrpList" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto">
-        ${GROUPS.length===0?'<div style="padding:12px;text-align:center;color:#667781;font-size:13px">Group இல்லை — முதலில் group உருவாக்கவும்</div>':
-          GROUPS.map(function(g,i){return '<div onclick="this.classList.toggle(\'sel\');this.style.background=this.classList.contains(\'sel\')?\'rgba(37,211,102,.1)\':\'\';this.querySelector(\'.chk\').textContent=this.classList.contains(\'sel\')?\'✓\':\'\'" data-gid="'+g.id+'" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;border:1px solid #e9edef;cursor:pointer;transition:background .2s"><div style="width:34px;height:34px;border-radius:50%;background:linear-gradient('+g.color+');display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">'+g.emoji+'</div><div style="flex:1"><div style="font-size:14px;font-weight:600">'+g.name+'</div><div style="font-size:12px;color:#667781">'+((g.members&&g.members.length)||0)+' members</div></div><div class="chk" style="width:22px;height:22px;border-radius:50%;border:2px solid #008069;display:flex;align-items:center;justify-content:center;font-size:13px;color:#008069;font-weight:700;flex-shrink:0"></div></div>';}).join('')
-        }
-      </div>
-    </div>
-    <button onclick="doCreateCommunity()" style="width:100%;padding:14px;background:linear-gradient(135deg,#008069,#006d5b);border:none;border-radius:13px;color:#fff;font-size:15px;font-weight:700;cursor:pointer;font-family:'Noto Sans Tamil',sans-serif">✅ Community உருவாக்கவும்</button>
-  </div>`;
+
+  const grpRows=GROUPS.length===0
+    ?'<div style="padding:10px;text-align:center;color:#667781;font-size:13px">Group இல்லை</div>'
+    :GROUPS.map(function(g){
+      return '<div onclick="this.classList.toggle(\'sg\');this.style.background=this.classList.contains(\'sg\')?\'rgba(37,211,102,.12)\':\'\'" data-gid="'+g.id+'" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;border:1px solid #e9edef;cursor:pointer;margin-bottom:6px">'
+        +'<div style="width:34px;height:34px;border-radius:50%;background:linear-gradient('+g.color+');display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">'+g.emoji+'</div>'
+        +'<div style="flex:1;font-size:14px;font-weight:600">'+g.name+'<div style="font-size:12px;color:#667781;font-weight:400">'+((g.members&&g.members.length)||0)+' members</div></div>'
+        +'</div>';
+    }).join('');
+
+  const ctRows=CONTACTS.length===0
+    ?'<div style="padding:10px;text-align:center;color:#667781;font-size:13px">Contacts இல்லை</div>'
+    :CONTACTS.map(function(c){
+      return '<div onclick="this.classList.toggle(\'sc\');this.style.background=this.classList.contains(\'sc\')?\'rgba(37,211,102,.12)\':\'\'" data-cid="'+c.id+'" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;border:1px solid #e9edef;cursor:pointer;margin-bottom:6px">'
+        +'<div style="width:34px;height:34px;border-radius:50%;background:linear-gradient('+c.color+');display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">'+c.emoji+'</div>'
+        +'<div style="flex:1;font-size:14px;font-weight:600">'+c.name+'<div style="font-size:12px;color:#667781;font-weight:400">'+c.phone+'</div></div>'
+        +'</div>';
+    }).join('');
+
+  ov.innerHTML='<div style="width:100%;background:#fff;border-radius:20px 20px 0 0;padding:20px 18px 32px;max-height:88vh;overflow-y:auto">'
+    +'<div style="display:flex;align-items:center;margin-bottom:14px">'
+    +'<div style="font-family:Syne,sans-serif;font-size:18px;font-weight:700;flex:1">👥 New Community</div>'
+    +'<button onclick="document.getElementById(\'mo-community\').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#667781">✕</button></div>'
+    +'<input type="text" id="commNm" placeholder="Community name *" maxlength="50" style="width:100%;background:#f0f2f5;border:1.5px solid #e9edef;border-radius:12px;padding:12px 14px;font-size:15px;outline:none;font-family:Noto Sans Tamil,sans-serif;color:#111b21;margin-bottom:10px">'
+    +'<input type="text" id="commDesc" placeholder="Description (optional)" maxlength="100" style="width:100%;background:#f0f2f5;border:1.5px solid #e9edef;border-radius:12px;padding:12px 14px;font-size:15px;outline:none;font-family:Noto Sans Tamil,sans-serif;color:#111b21;margin-bottom:14px">'
+    +'<div style="font-size:12px;font-family:Space Mono,monospace;color:#008069;margin-bottom:8px">📌 GROUPS (tap to select)</div>'
+    +'<div id="commGrpList">'+grpRows+'</div>'
+    +'<div style="font-size:12px;font-family:Space Mono,monospace;color:#008069;margin:12px 0 8px">👤 CONTACTS (tap to select)</div>'
+    +'<div id="commCtList">'+ctRows+'</div>'
+    +'<button onclick="doCreateCommunity()" style="width:100%;padding:14px;background:linear-gradient(135deg,#008069,#006d5b);border:none;border-radius:13px;color:#fff;font-size:15px;font-weight:700;cursor:pointer;font-family:Noto Sans Tamil,sans-serif;margin-top:16px">✅ Community உருவாக்கவும்</button>'
+    +'</div>';
   document.body.appendChild(ov);
   ov.addEventListener('click',function(e){if(e.target===ov)ov.remove();});
 }
@@ -5413,23 +5470,27 @@ function doCreateCommunity(){
   const nm=(document.getElementById('commNm')?document.getElementById('commNm').value.trim():'');
   const desc=(document.getElementById('commDesc')?document.getElementById('commDesc').value.trim():'');
   if(!nm){toast('⚠️ Community name கொடுக்கவும்');return;}
-  const selGrps=[...document.querySelectorAll('#commGrpList [data-gid].sel')].map(function(el){return el.getAttribute('data-gid');});
+  const selGrps=[...document.querySelectorAll('#commGrpList [data-gid].sg')].map(function(el){return el.getAttribute('data-gid');});
+  const selCts=[...document.querySelectorAll('#commCtList [data-cid].sc')].map(function(el){return el.getAttribute('data-cid');});
   const myId=(S.session&&S.session.userId)||'me';
-  const comm={
-    id:'comm_'+Date.now(),name:nm,desc:desc||'',
-    emoji:'👥',color:'135deg,#ff6b9d,#e91e8c',
-    groupIds:selGrps,createdBy:myId,createdAt:Date.now()
-  };
-  COMMUNITIES.unshift(comm);
-  saveCommunities();
-  // Also create as a special group with type=community
+
+  // Build members from selected contacts
+  const contactMembers=selCts.map(function(cid){
+    const c=CONTACTS.find(function(x){return x.id===cid;});
+    return c?{id:c.id,name:c.name,emoji:c.emoji,color:c.color,phone:c.phone}:null;
+  }).filter(Boolean);
+
+  const me={id:myId,name:(S.session&&S.session.displayName)||'Me',emoji:'😊',color:'135deg,#25d366,#128c7e',phone:(S.session&&S.session.phone)||'',isMe:true};
+  const members=[me,...contactMembers];
+
+  const commId='comm_'+Date.now()+'_'+Math.random().toString(36).slice(2,5);
   const commGroup={
-    id:comm.id,name:nm,emoji:'👥',
+    id:commId,name:nm,emoji:'👥',
     color:'135deg,#ff6b9d,#e91e8c',
     desc:desc||'',createdBy:myId,admins:[myId],
-    members:[{id:myId,name:(S.session&&S.session.displayName)||'Me',emoji:'😊',color:'135deg,#25d366,#128c7e',phone:(S.session&&S.session.phone)||'',isMe:true}],
+    members:members,
     messages:[{id:Date.now(),from:'System',fromId:'sys',out:false,
-      text:'👥 '+nm+' community உருவாக்கப்பட்டது! '+selGrps.length+' groups சேர்க்கப்பட்டன.',
+      text:'👥 '+nm+' community உருவாக்கப்பட்டது!'+(selGrps.length?' '+selGrps.length+' groups சேர்க்கப்பட்டன.':''),
       time:nowTime(),tick:'r',type:'text'}],
     lastMsg:'👥 Community created!',lastTime:nowTime(),unread:0,
     inviteToken:'comm_'+Date.now().toString(36),
@@ -5439,12 +5500,12 @@ function doCreateCommunity(){
   saveGroups();
   const mo=document.getElementById('mo-community');if(mo)mo.remove();
   renderChatList();
-  toast('✅ "'+nm+'" community உருவாக்கப்பட்டது!');
+  toast('✅ "'+nm+'" community '+members.length+' members-உடன் உருவாக்கப்பட்டது!');
   setTimeout(function(){
     openChat({id:commGroup.id,type:'group',name:commGroup.name,emoji:'👥',
       color:commGroup.color,lastMsg:commGroup.lastMsg,lastTime:commGroup.lastTime,
       unread:0,messages:commGroup.messages,groupRef:commGroup});
-  },400);
+  },350);
 }
 let replyIdx=null;
 function setReply(idx){
@@ -5786,8 +5847,8 @@ function openLink(url){
 // ── FIX: image bubble — show image with caption below (WhatsApp style) ──
 // Already handled in renderMsgs image case
 
-console.log('🔥 VST v19.0 — NEW Supabase: vst-business | Group Messages FIXED + Delete + Invite!');
-console.log('📡 Project: bliarqssulaolfbxuiob (vst-business)');
+console.log('🔥 VST v20.0 — createGroup Fix + Delete Fix + Admin Demote + Community Contacts + Video Fix!');
+console.log('📡 Supabase: bliarqssulaolfbxuiob (vst-business)');
 
 // Run invite check after boot
 setTimeout(()=>{try{checkInviteLink();}catch(e){}},2000);
