@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <meta name="theme-color" content="#0b1f14">
-<title>VST — Business Messenger v19.0</title>
+<title>VST — Business Messenger v22.0</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Tamil:wght@400;500;600;700&family=Syne:wght@700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
@@ -1206,7 +1206,6 @@ display:flex;flex-direction:column;gap:2px;min-height:0;-webkit-overflow-scrolli
       <div class="set-sec-t">APP INFO</div>
       <div class="set-item" onclick="toast('VST v15.0 — Complete WhatsApp Clone ✅')"><div class="si-ico">ℹ️</div><div class="si-inf"><div class="si-nm">VST v15.0</div><div class="si-ht">Complete Business Messenger</div></div></div>
     </div>
-    <div class="set-sec"><div class="set-item" onclick="showAppInviteLink()"><div class="si-ico">🔗</div><div class="si-inf"><div class="si-nm">App Link Share</div><div class="si-ht">யாரையும் VST-க்கு invite செய்யவும்</div></div><div class="si-arr">›</div></div></div>
     <div class="set-sec"><div class="set-item" onclick="doLogout()" style="color:var(--danger)"><div class="si-ico">🚪</div><div class="si-inf"><div class="si-nm" style="color:var(--danger)">Logout</div></div></div></div>
   </div>
 </div>
@@ -1255,7 +1254,7 @@ display:flex;flex-direction:column;gap:2px;min-height:0;-webkit-overflow-scrolli
         <div class="drop-item" onclick="openMediaTab(S.curGroup||S.curChat);closeDD('chatMenu')">Media, links, and docs</div>
         <div class="drop-item" onclick="setDisappearing(S.curChat,24);closeDD('chatMenu')">Disappearing messages</div>
         <div class="drop-item" onclick="openWallpaperPicker();closeDD('chatMenu')">Chat theme</div>
-        <div class="drop-item" id="chatMenuInviteItem" onclick="(S.curChat&&S.curChat.type==='group'?showGroupInvite():showPersonalInvite());closeDD('chatMenu')">Invite link</div>
+        <div class="drop-item" id="chatMenuInviteItem" onclick="closeDD('chatMenu');setTimeout(function(){if(S.curChat&&S.curChat.type==='group')showGroupInvite();else showPersonalInvite();},150)">🔗 Invite link</div>
         <div class="drop-item danger" onclick="closeDD('chatMenu');toast('🚫 Block')">Block</div>
         <div class="drop-item danger" onclick="closeDD('chatMenu');clearChatConfirm()">Clear chat</div>
       </div>
@@ -1897,8 +1896,8 @@ const S = {
 // ════════════════════════════════════════════════════════════
 //  SUPABASE — Backend (replaces Firebase)
 // ════════════════════════════════════════════════════════════
-const SUPABASE_URL = 'https://fmvewzecltvtlazxlonn.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZtdmV3emVjbHR2dGxhenhsb25uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2NzI5ODIsImV4cCI6MjA5MjI0ODk4Mn0.7fFr97dR6MNLInLmIa0ecNcyF_N8J0On5TeKFdDblOY';
+const SUPABASE_URL = 'https://bliarqssulaolfbxuiob.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsaWFycXNzdWxhb2xmYnh1aW9iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4MzIwOTEsImV4cCI6MjA5MjQwODA5MX0.NLoXXzz8uwmQwZ2MxMvtltekD0E2Mnervf28OdHWPF4';
 
 let sbClient = null;
 let sbChatChannel = null;
@@ -2250,7 +2249,7 @@ function boot(){
   if(splash){ splash.style.display='none'; }
 
   // ── FRESH START: Clear old data if project changed ──
-  const currentProject='fmvewzecltvtlazxlonn';
+  const currentProject='bliarqssulaolfbxuiob';
   const savedProject=localStorage.getItem('vst_supabase_project');
   if(savedProject && savedProject!==currentProject){
     // Project changed — clear all old data for fresh start
@@ -2263,7 +2262,6 @@ function boot(){
 
   // Init Supabase first
   try{ initFirebase(); }catch(e){}
-  try{ checkInviteLink(); }catch(e){}
   try{ setupTap(); }catch(e){}
   try{ checkLock(); }catch(e){}
 
@@ -3439,17 +3437,19 @@ function renderMsgs(msgs){
         break;
       }
       case 'video': {
-        // Accept: data URLs, https Supabase storage URLs, blob URLs
         const vidSrc=m.sbUrl||m.src||'';
         const vidOk=vidSrc&&vidSrc.length>10&&vidSrc!=='[vid_lost]'&&vidSrc!=='[media]';
         const safeVidSrc=vidOk?vidSrc.replace(/'/g,"\\'"):'';
         content=`${replyQuote}
-          <div class="bub-vid-wrap" onclick="${vidOk?`openMV('video','${safeVidSrc}')`:'toast(\"🎬 Video upload-ல் உள்ளது — internet connection check செய்யவும்\")'}">
+          <div class="bub-vid-wrap" style="position:relative;cursor:pointer" onclick="${vidOk?`openMV('video','`+safeVidSrc+`')`:'toast(\"⏳ Video upload ஆகிறது — சிறிது நேரம் பொறுக்கவும்\")'}">
             ${vidOk
-              ? `<video src="${vidSrc}" style="width:240px;height:160px;object-fit:cover;border-radius:10px;display:block" muted preload="metadata" playsinline></video>`
-              : `<div style="width:240px;height:160px;background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px"><div style="font-size:40px">🎬</div><div style="font-size:11px;color:rgba(255,255,255,.6)">Video processing...</div></div>`
+              ? `<video src="${vidSrc}" style="width:240px;height:160px;object-fit:cover;border-radius:10px;display:block" muted preload="metadata" playsinline></video>
+                 <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center"><div style="width:44px;height:44px;border-radius:50%;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;font-size:20px;color:#fff">▶</div></div>`
+              : `<div style="width:240px;height:160px;background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px">
+                   <div style="font-size:36px">🎬</div>
+                   <div style="font-size:11px;color:rgba(255,255,255,.7);font-family:Space Mono,monospace">Uploading...</div>
+                 </div>`
             }
-            <div class="bub-vid-play"><div class="bub-vid-play-btn">▶</div></div>
           </div>
           <div style="font-size:11px;color:var(--muted);margin-top:3px">${m.name||'Video'}${m.size?' · '+m.size:''}</div>
           <div class="bub-meta"><span class="bub-time">${m.time}</span>${tick}</div>${reactions}`;
@@ -4038,15 +4038,28 @@ function sendMsg(){
 // ── MEDIA VIEWER ──
 let mvSrc='',mvType='';
 function openMV(type,src){
+  if(!src||src.length<5){toast('⚠️ Media load ஆகவில்லை');return;}
   mvSrc=src;mvType=type;
   const v=document.getElementById('media-viewer');
   const img=document.getElementById('mv-img'),vid=document.getElementById('mv-vid');
   img.style.display='none';vid.style.display='none';
-  if(type==='image'){img.src=src;img.style.display='block';}
-  else if(type==='video'){vid.src=src;vid.style.display='block';}
+  if(type==='image'){
+    img.src=src;img.style.display='block';
+  } else if(type==='video'){
+    vid.src=src;
+    vid.style.display='block';
+    vid.controls=true;
+    vid.playsinline=true;
+    // Auto-play
+    setTimeout(function(){vid.play().catch(function(){});},200);
+  }
   v.classList.add('show');
 }
-function closeMV(){document.getElementById('media-viewer').classList.remove('show');document.getElementById('mv-vid').pause();}
+function closeMV(){
+  const vid=document.getElementById('mv-vid');
+  if(vid){vid.pause();vid.src='';}
+  document.getElementById('media-viewer').classList.remove('show');
+}
 function downloadMedia(){
   if(!mvSrc)return;
   const a=document.createElement('a');a.href=mvSrc;a.download='VST_media_'+Date.now();a.click();
@@ -4362,44 +4375,80 @@ function msgMember(cid){
 }
 
 function leaveGroup(gid){
-  if(!confirm('இந்த group-இல் இருந்து leave செய்யவா?'))return;
-  const myId=(S.session&&S.session.userId)||'me';
-  const grp=GROUPS.find(function(g){return g.id===gid;});
-  if(grp){
-    grp.members=grp.members.filter(function(m){return m.id!==myId&&m.id!=='me'&&!m.isMe;});
-    // Update Supabase
-    if(fbReady()){
-      const memberIds=grp.members.map(function(m){return m.id;});
-      sbClient.from('groups').upsert({id:gid,member_ids:memberIds,members:grp.members},{onConflict:'id'}).catch(function(){});
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML='<div style="background:#fff;border-radius:20px;padding:28px 22px;max-width:320px;width:100%;text-align:center;box-shadow:0 8px 40px rgba(0,0,0,.3)">'
+    +'<div style="font-size:40px;margin-bottom:12px">🚪</div>'
+    +'<div style="font-family:Syne,sans-serif;font-size:18px;font-weight:700;margin-bottom:10px">Group Leave செய்யவா?</div>'
+    +'<div style="font-size:14px;color:#667781;margin-bottom:24px">நீங்கள் இந்த group-இல் இருந்து remove ஆவீர்கள்.</div>'
+    +'<div style="display:flex;gap:10px">'
+    +'<button id="lvCancelBtn" style="flex:1;padding:13px;background:#f0f2f5;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:Noto Sans Tamil,sans-serif">Cancel</button>'
+    +'<button id="lvConfirmBtn" style="flex:1;padding:13px;background:linear-gradient(135deg,#f15c6d,#e74c3c);border:none;border-radius:12px;color:#fff;font-size:15px;font-weight:700;cursor:pointer;font-family:Noto Sans Tamil,sans-serif">🚪 Leave</button>'
+    +'</div></div>';
+  document.body.appendChild(overlay);
+  document.getElementById('lvCancelBtn').onclick=function(){overlay.remove();};
+  document.getElementById('lvConfirmBtn').onclick=function(){
+    overlay.remove();
+    const myId=(S.session&&S.session.userId)||'me';
+    const grp=GROUPS.find(function(g){return g.id===gid;});
+    if(grp){
+      grp.members=grp.members.filter(function(m){return m.id!==myId&&m.id!=='me'&&!m.isMe;});
+      if(fbReady()){
+        const memberIds=grp.members.map(function(m){return m.id;});
+        sbClient.from('groups').upsert({id:gid,member_ids:memberIds,members:grp.members},{onConflict:'id'}).catch(function(){});
+      }
     }
-  }
-  GROUPS=GROUPS.filter(function(g){return g.id!==gid;});
-  saveGroups();
-  renderChatList();
-  toast('🚪 Group left!');
-  closePage('pg-grpinfo');
-  closePage('pg-chat');
+    GROUPS=GROUPS.filter(function(g){return g.id!==gid;});
+    try{localStorage.setItem('vst_groups',JSON.stringify(GROUPS));}catch(e){}
+    S.curChat=null;S.curGroup=null;
+    renderChatList();
+    toast('🚪 Group left!');
+    const grpInfoEl=document.getElementById('pg-grpinfo');
+    if(grpInfoEl){grpInfoEl.classList.add('inv');grpInfoEl.style.display='none';}
+    const chatEl=document.getElementById('pg-chat');
+    if(chatEl){chatEl.classList.add('inv');chatEl.style.display='none';}
+  };
 }
 
 function deleteGroup(gid){
-  if(!confirm('இந்த group-ஐ delete செய்யவா? Recover முடியாது!'))return;
+  // Custom confirm — browser confirm() is blocked in some PWA/GitHub Pages environments
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML='<div style="background:#fff;border-radius:20px;padding:28px 22px;max-width:320px;width:100%;text-align:center;box-shadow:0 8px 40px rgba(0,0,0,.3)">'
+    +'<div style="font-size:40px;margin-bottom:12px">🗑️</div>'
+    +'<div style="font-family:Syne,sans-serif;font-size:18px;font-weight:700;margin-bottom:10px">Group Delete செய்யவா?</div>'
+    +'<div style="font-size:14px;color:#667781;margin-bottom:24px;line-height:1.6">இந்த group மற்றும் அதில் உள்ள அனைத்து messages-உம் நிரந்தரமாக delete ஆகும். Recover முடியாது!</div>'
+    +'<div style="display:flex;gap:10px">'
+    +'<button id="delCancelBtn" style="flex:1;padding:13px;background:#f0f2f5;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:Noto Sans Tamil,sans-serif">Cancel</button>'
+    +'<button id="delConfirmBtn" style="flex:1;padding:13px;background:linear-gradient(135deg,#f15c6d,#e74c3c);border:none;border-radius:12px;color:#fff;font-size:15px;font-weight:700;cursor:pointer;font-family:Noto Sans Tamil,sans-serif">🗑️ Delete</button>'
+    +'</div></div>';
+  document.body.appendChild(overlay);
+
+  document.getElementById('delCancelBtn').onclick=function(){overlay.remove();};
+  document.getElementById('delConfirmBtn').onclick=function(){
+    overlay.remove();
+    _doDeleteGroup(gid);
+  };
+}
+
+function _doDeleteGroup(gid){
   // Stop any active listeners
   if(fbChatUnsub){try{fbChatUnsub.unsubscribe();}catch(e){}fbChatUnsub=null;}
   // Remove from GROUPS array
   GROUPS=GROUPS.filter(function(g){return g.id!==gid;});
-  // Write directly to localStorage to ensure deletion persists
+  // Write directly to localStorage
   try{localStorage.setItem('vst_groups',JSON.stringify(GROUPS));}catch(e){}
   // Delete from Supabase
   if(fbReady()){
     sbClient.from('groups').delete().eq('id',gid).catch(function(){});
     sbClient.from('messages').delete().eq('chat_id',gid).catch(function(){});
   }
-  // Clear curChat so leaveChat() doesn't re-save it
+  // Clear state
   S.curChat=null;
   S.curGroup=null;
   renderChatList();
   toast('🗑️ Group deleted!');
-  // Close both pages directly without saving
+  // Close both pages directly
   const grpInfoEl=document.getElementById('pg-grpinfo');
   if(grpInfoEl){grpInfoEl.classList.add('inv');grpInfoEl.style.display='none';}
   const chatEl=document.getElementById('pg-chat');
@@ -5647,20 +5696,23 @@ function selCopy(){
 
 // ── GROUP INVITE LINK ──
 function showGroupInvite(){
+  // Get group reference
   let grp=null;
   if(S.curChat&&S.curChat.groupRef)grp=S.curChat.groupRef;
   else if(S.curChat&&S.curChat.id)grp=GROUPS.find(function(g){return g.id===S.curChat.id;});
-  if(!grp){toast('ℹ️ Group chat-ல் மட்டும் இந்த option வரும்');return;}
-  // Generate unique invite token if not exists
+  if(!grp){toast('ℹ️ Group chat-ல் மட்டும் invite link கிடைக்கும்');return;}
+
+  // Generate invite token if not exists
   if(!grp.inviteToken){
     grp.inviteToken=grp.id+'_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8);
-    saveGroups();
+    try{localStorage.setItem('vst_groups',JSON.stringify(GROUPS));}catch(e){}
   }
-  // Use current page URL as base — works on GitHub Pages, Vercel, any host
-  const baseUrl=window.location.origin+window.location.pathname.replace(/\/[^\/]*$/,'').replace(/\/+$/,'');
+
+  // Build invite link using current URL
   const appUrl=window.location.origin+window.location.pathname;
   const link=appUrl+'#/invite/'+grp.inviteToken;
-  // Fill invite page
+
+  // Fill all invite page elements
   const iconEl=document.getElementById('inviteGrpIcon');
   if(iconEl){iconEl.textContent=grp.emoji;iconEl.style.background='linear-gradient('+grp.color+')';}
   const nmEl=document.getElementById('inviteGrpName');if(nmEl)nmEl.textContent=grp.name;
@@ -5668,9 +5720,18 @@ function showGroupInvite(){
   const linkEl=document.getElementById('inviteLinkText');if(linkEl)linkEl.textContent=link;
   window._inviteLink=link;
   window._inviteGrpId=grp.id;
-  // Close dropdown first, then open page
-  closeDD('chatMenu');
-  setTimeout(function(){openPage('pg-invite');},100);
+
+  // Force show the invite page (reset any stale state)
+  const pgInvite=document.getElementById('pg-invite');
+  if(pgInvite){
+    pgInvite.classList.remove('inv','out-r','out-l','out-u');
+    pgInvite.style.display='flex';
+    pgInvite.style.flexDirection='column';
+    pgInvite.style.opacity='1';
+    pgInvite.style.transform='none';
+    pgInvite.style.pointerEvents='auto';
+    pgInvite.offsetHeight;
+  }
 }
 
 // ── PERSONAL CONTACT VST LINK ──
@@ -5746,19 +5807,6 @@ function resetInviteLink(){
 }
 
 // Handle group join via invite link (on app start)
-
-// ── APP-WIDE INVITE LINK ──
-function showAppInviteLink(){
-  const link='https://vst-app-team.github.io/vst-app/';
-  const msg='VST Business Messenger-ல் join ஆகவும்!\nInstall செய்து login செய்யவும்.\n'+link;
-  if(navigator.share){
-    navigator.share({title:'VST Business Messenger',text:msg,url:link}).catch(function(){});
-  } else {
-    navigator.clipboard&&navigator.clipboard.writeText(link)
-      .then(function(){toast('📋 App link copied!');})
-      .catch(function(){toast('📋 App link: '+link);});
-  }
-}
 function checkInviteLink(){
   // Check both hash and URL path for invite
   const fullUrl=window.location.href;
@@ -5916,8 +5964,8 @@ function openLink(url){
 // ── FIX: image bubble — show image with caption below (WhatsApp style) ──
 // Already handled in renderMsgs image case
 
-console.log('🔥 VST v21.0 — Back Button Fix + Delete Group Fix + Video Persist Fix!');
-console.log('📡 Supabase: fmvewzecltvtlazxlonn (vst-business)');
+console.log('🔥 VST v22.0 — FINAL: New Supabase + Delete Fix + Invite Fix + Video Fix!');
+console.log('📡 Supabase: bliarqssulaolfbxuiob (vst-business) ✅');
 
 // Run invite check after boot
 setTimeout(()=>{try{checkInviteLink();}catch(e){}},2000);
