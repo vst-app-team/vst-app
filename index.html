@@ -1232,7 +1232,7 @@ display:flex;flex-direction:column;gap:2px;min-height:0;-webkit-overflow-scrolli
 
   <!-- Normal Chat Header -->
   <div class="chat-hdr" style="flex-shrink:0;position:relative;z-index:30">
-    <button onclick="closePage('pg-chat');exitSelMode()" style="background:none;border:none;color:rgba(255,255,255,.95);font-size:30px;font-weight:300;cursor:pointer;padding:4px 8px 4px 2px;line-height:1;display:flex;align-items:center">‹</button>
+    <button onclick="leaveChat()" style="background:none;border:none;color:rgba(255,255,255,.95);font-size:30px;font-weight:300;cursor:pointer;padding:4px 8px 4px 2px;line-height:1;display:flex;align-items:center">‹</button>
     <div class="chat-hdr-av" id="chHdAv" onclick="openGroupInfo()" style="cursor:pointer"></div>
     <div class="chat-hdr-inf" onclick="openGroupInfo()" style="cursor:pointer">
       <div class="chat-hdr-nm" id="chHdNm">Chat</div>
@@ -1965,12 +1965,22 @@ async function fbSendMessage(chatId, message) {
 async function fbUploadMedia(file, path) {
   if (!fbReady()) return null;
   try {
-    const fileName = path + '/' + Date.now() + '_' + file.name;
-    const { data, error } = await sbClient.storage.from('media').upload(fileName, file, { upsert:true });
-    if (error) throw error;
+    const fileName = path + '/' + Date.now() + '_' + (file.name||'media');
+    const { data, error } = await sbClient.storage.from('media').upload(fileName, file, { upsert:true, cacheControl:'31536000' });
+    if (error) {
+      // If bucket doesn't exist, try to create it
+      if(error.message&&(error.message.includes('Bucket not found')||error.message.includes('bucket'))){
+        console.warn('Storage bucket not found — keeping base64');
+        return null;
+      }
+      throw error;
+    }
     const { data: urlData } = sbClient.storage.from('media').getPublicUrl(fileName);
     return urlData.publicUrl;
-  } catch(e) { console.warn('fbUploadMedia:', e.message); return null; }
+  } catch(e) {
+    console.warn('fbUploadMedia:', e.message);
+    return null; // fallback to base64 in localStorage
+  }
 }
 
 // ── ONLINE PRESENCE ──
@@ -2120,29 +2130,33 @@ function saveGroups(){
       return {
         ...g,
         messages:(g.messages||[]).map(function(m){
-          if(m.sbUrl)return m;
-          // Keep system messages always
-          if(m.fromId==='sys'||m.type==='text'||m.type==='poll'||m.type==='sticker'||m.type==='location'||m.type==='contact'||m.type==='payment')return m;
-          // Media: keep if under size limit, else keep sbUrl placeholder
+          // Always keep Supabase URL messages
+          if(m.sbUrl)return {...m,src:m.sbUrl};
+          // Keep system/text messages always
+          if(!m.type||m.type==='text'||m.type==='poll'||m.type==='sticker'||
+             m.type==='location'||m.type==='contact'||m.type==='payment'||
+             m.type==='live_location'||m.fromId==='sys')return m;
+          // Media: keep base64 if under limit (video 5MB, audio/image 2MB)
+          if(m.type==='video')return {...m,src:(m.src&&m.src.startsWith('data:')&&m.src.length<5000000)?m.src:(m.src&&!m.src.startsWith('data:')?m.src:'[vid_lost]')};
           if(m.type==='voice')return {...m,src:(m.src&&m.src.length<2000000)?m.src:'[voice_lost]'};
           if(m.type==='image')return {...m,src:(m.src&&m.src.length<2000000)?m.src:'[img_lost]'};
-          if(m.type==='video')return {...m,src:(m.src&&m.src.length<500)?m.src:'[vid_lost]'};
           return m;
         })
       };
     });
     try{localStorage.setItem('vst_groups',JSON.stringify(toSave));}
-    catch(q){
-      // Quota: strip all media src but keep message structure
+    catch(quota){
+      // Quota exceeded — keep sbUrl and https URLs, strip base64
       const stripped=GROUPS.map(function(g){
         return {...g,messages:(g.messages||[]).map(function(m){
-          if(m.sbUrl)return m;
+          if(m.sbUrl)return {...m,src:m.sbUrl};
+          if(m.src&&m.src.startsWith('http'))return m; // keep https URLs
           return ['voice','image','video'].includes(m.type)?{...m,src:'[media]'}:m;
         })};
       });
-      try{localStorage.setItem('vst_groups',JSON.stringify(stripped));}catch(e2){}
+      try{localStorage.setItem('vst_groups',JSON.stringify(stripped));}catch(e2){console.warn('Storage full:',e2);}
     }
-    // Supabase sync
+    // Supabase sync (group metadata only, not messages)
     if(fbReady()){
       GROUPS.forEach(function(g){
         const memberIds=(g.members||[]).map(function(m){return m.id;});
@@ -2671,6 +2685,28 @@ function switchTab(n){
   document.querySelectorAll('.tab-pnl').forEach(p=>p.classList.remove('on'));
   document.getElementById('tb-'+n).classList.add('on');
   document.getElementById('pnl-'+n).classList.add('on');
+}
+
+// ── LEAVE CHAT (back button) — save messages safely before closing ──
+function leaveChat(){
+  exitSelMode();
+  if(S.curChat){
+    if(S.curChat.type==='group'){
+      const grpInArray=GROUPS.find(function(g){return g.id===S.curChat.id;});
+      if(grpInArray&&S.curChat.messages&&S.curChat.messages.length>0){
+        grpInArray.messages=S.curChat.messages;
+        if(S.curChat.groupRef){
+          grpInArray.lastMsg=S.curChat.groupRef.lastMsg||grpInArray.lastMsg;
+          grpInArray.lastTime=S.curChat.groupRef.lastTime||grpInArray.lastTime;
+        }
+        try{localStorage.setItem('vst_groups',JSON.stringify(GROUPS));}catch(e){}
+      }
+    } else if(S.curChat.type==='personal'){
+      savePersonalChats();
+    }
+  }
+  if(fbChatUnsub){try{fbChatUnsub.unsubscribe();}catch(e){}fbChatUnsub=null;}
+  closePage('pg-chat');
 }
 
 // ── OPEN CHAT ──
@@ -3231,7 +3267,17 @@ function pushMsg(msg){
             curChatRef.messages[msgIdx].sbUrl=uploaded;
             curChatRef.messages[msgIdx].src=uploaded;
           }
-          if(curChatRef.type==='personal')savePersonalChats();else saveGroups();
+          // ✅ Also sync to groupRef so saveGroups() persists the sbUrl
+          if(curChatRef.type==='group'){
+            const grpInArray=GROUPS.find(function(g){return g.id===chatId;});
+            if(grpInArray){
+              grpInArray.messages=curChatRef.messages;
+              if(curChatRef.groupRef)curChatRef.groupRef.messages=curChatRef.messages;
+            }
+            try{localStorage.setItem('vst_groups',JSON.stringify(GROUPS));}catch(e){}
+          } else {
+            savePersonalChats();
+          }
           renderMsgs(curChatRef.messages);
         }
       }catch(e){console.warn('Upload:',e.message);}
@@ -4335,19 +4381,27 @@ function leaveGroup(gid){
 
 function deleteGroup(gid){
   if(!confirm('இந்த group-ஐ delete செய்யவா? Recover முடியாது!'))return;
+  // Stop any active listeners
+  if(fbChatUnsub){try{fbChatUnsub.unsubscribe();}catch(e){}fbChatUnsub=null;}
   // Remove from GROUPS array
   GROUPS=GROUPS.filter(function(g){return g.id!==gid;});
-  // Save updated array to localStorage immediately
+  // Write directly to localStorage to ensure deletion persists
   try{localStorage.setItem('vst_groups',JSON.stringify(GROUPS));}catch(e){}
   // Delete from Supabase
   if(fbReady()){
     sbClient.from('groups').delete().eq('id',gid).catch(function(){});
     sbClient.from('messages').delete().eq('chat_id',gid).catch(function(){});
   }
+  // Clear curChat so leaveChat() doesn't re-save it
+  S.curChat=null;
+  S.curGroup=null;
   renderChatList();
   toast('🗑️ Group deleted!');
-  closePage('pg-grpinfo');
-  closePage('pg-chat');
+  // Close both pages directly without saving
+  const grpInfoEl=document.getElementById('pg-grpinfo');
+  if(grpInfoEl){grpInfoEl.classList.add('inv');grpInfoEl.style.display='none';}
+  const chatEl=document.getElementById('pg-chat');
+  if(chatEl){chatEl.classList.add('inv');chatEl.style.display='none';}
 }
 
 // ════════════════════════════════════════════
@@ -5847,7 +5901,7 @@ function openLink(url){
 // ── FIX: image bubble — show image with caption below (WhatsApp style) ──
 // Already handled in renderMsgs image case
 
-console.log('🔥 VST v20.0 — createGroup Fix + Delete Fix + Admin Demote + Community Contacts + Video Fix!');
+console.log('🔥 VST v21.0 — Back Button Fix + Delete Group Fix + Video Persist Fix!');
 console.log('📡 Supabase: bliarqssulaolfbxuiob (vst-business)');
 
 // Run invite check after boot
