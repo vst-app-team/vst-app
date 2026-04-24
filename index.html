@@ -1965,35 +1965,21 @@ async function fbSendMessage(chatId, message) {
 async function fbUploadMedia(file, path) {
   if (!fbReady()) return null;
   try {
-    const safeName=(file.name||'media').replace(/[^a-zA-Z0-9._-]/g,'_');
-    const fileName = path + '/' + Date.now() + '_' + safeName;
-    const { data, error } = await sbClient.storage.from('media').upload(fileName, file, {
-      upsert: true,
-      cacheControl: '31536000',
-      contentType: file.type || 'application/octet-stream'
-    });
+    const fileName = path + '/' + Date.now() + '_' + (file.name||'media');
+    const { data, error } = await sbClient.storage.from('media').upload(fileName, file, { upsert:true, cacheControl:'31536000' });
     if (error) {
+      // If bucket doesn't exist, try to create it
       if(error.message&&(error.message.includes('Bucket not found')||error.message.includes('bucket'))){
-        console.warn('Storage bucket not found — create "media" bucket in Supabase dashboard');
+        console.warn('Storage bucket not found — keeping base64');
         return null;
       }
-      if(error.message&&error.message.includes('size')){
-        console.warn('File too large for Supabase free tier (50MB limit):', file.size);
-        return null;
-      }
-      console.warn('Upload error:', error.message);
-      // Retry once
-      await new Promise(res=>setTimeout(res,2000));
-      const retry=await sbClient.storage.from('media').upload(fileName+'_r', file, {upsert:true,contentType:file.type||'application/octet-stream'});
-      if(retry.error){console.warn('Retry failed:',retry.error.message);return null;}
-      const {data:retryUrl}=sbClient.storage.from('media').getPublicUrl(fileName+'_r');
-      return retryUrl.publicUrl;
+      throw error;
     }
     const { data: urlData } = sbClient.storage.from('media').getPublicUrl(fileName);
     return urlData.publicUrl;
   } catch(e) {
     console.warn('fbUploadMedia:', e.message);
-    return null;
+    return null; // fallback to base64 in localStorage
   }
 }
 
@@ -2114,29 +2100,24 @@ function savePersonalChats(){
       return {
         ...chat,
         messages:(chat.messages||[]).map(function(m){
-          // ── VIDEO: ONLY keep sbUrl or https URL — never base64 ──
-          if(m.type==='video'){
-            const safeUrl=m.sbUrl||(m.src&&m.src.startsWith('http')?m.src:null);
-            if(safeUrl)return {...m,src:safeUrl,sbUrl:safeUrl,file:undefined,_uploading:false};
-            return {...m,src:'',sbUrl:'',file:undefined,_uploading:true};
-          }
-          // Supabase permanent URL → always use
-          if(m.sbUrl)return {...m,src:m.sbUrl,file:undefined};
-          // Voice/image: keep base64 up to 2MB
-          if(m.type==='voice')return {...m,src:(m.src&&m.src.length<2000000)?m.src:'[voice_lost]',file:undefined};
-          if(m.type==='image')return {...m,src:(m.src&&m.src.length<2000000)?m.src:'[img_lost]',file:undefined};
-          return {...m,file:undefined};
+          // If Supabase URL exists (sbUrl), always keep it — permanent storage
+          if(m.sbUrl)return m;
+          // Keep base64: voice up to 2MB, images up to 2MB, video up to 4MB
+          if(m.type==='voice')return {...m,src:(m.src&&m.src.length<2000000)?m.src:'[voice_lost]'};
+          if(m.type==='image')return {...m,src:(m.src&&m.src.length<2000000)?m.src:'[img_lost]'};
+          if(m.type==='video')return {...m,src:(m.src&&m.src.length<4000000)?m.src:'[vid_lost]'};
+          return m;
         })
       };
     });
     try{
       localStorage.setItem('vst_personal_chats',JSON.stringify(toSave));
     }catch(quota){
+      // Quota exceeded — keep sbUrl ones, strip rest
       const stripped=PERSONAL_CHATS.map(function(chat){
         return {...chat,messages:(chat.messages||[]).map(function(m){
-          const safe=m.sbUrl||(m.src&&m.src.startsWith('http')?m.src:null);
-          if(safe)return {...m,src:safe,file:undefined};
-          return ['voice','image','video'].includes(m.type)?{...m,src:'[media]',file:undefined}:m;
+          if(m.sbUrl)return m; // keep Supabase URL messages
+          return ['voice','image','video'].includes(m.type)?{...m,src:'[media]'}:m;
         })};
       });
       try{localStorage.setItem('vst_personal_chats',JSON.stringify(stripped));}catch(e2){}
@@ -2149,39 +2130,33 @@ function saveGroups(){
       return {
         ...g,
         messages:(g.messages||[]).map(function(m){
-          // ── VIDEO: ONLY keep if sbUrl or https URL exists — never base64 ──
-          if(m.type==='video'){
-            const safeUrl=m.sbUrl||(m.src&&m.src.startsWith('http')?m.src:null);
-            if(safeUrl)return {...m,src:safeUrl,sbUrl:safeUrl,file:undefined,_uploading:m._uploading||false};
-            // No permanent URL yet — keep _uploading flag, strip src
-            return {...m,src:'',sbUrl:'',file:undefined,_uploading:true};
-          }
-          // Supabase permanent URL → always use
-          if(m.sbUrl)return {...m,src:m.sbUrl,file:undefined};
-          // System/text messages always keep
+          // Always keep Supabase URL messages
+          if(m.sbUrl)return {...m,src:m.sbUrl};
+          // Keep system/text messages always
           if(!m.type||m.type==='text'||m.type==='poll'||m.type==='sticker'||
              m.type==='location'||m.type==='contact'||m.type==='payment'||
              m.type==='live_location'||m.fromId==='sys')return m;
-          // Voice/image: keep base64 if under 2MB
-          if(m.type==='voice')return {...m,src:(m.src&&m.src.length<2000000)?m.src:'[voice_lost]',file:undefined};
-          if(m.type==='image')return {...m,src:(m.src&&m.src.length<2000000)?m.src:'[img_lost]',file:undefined};
-          return {...m,file:undefined};
+          // Media: keep base64 if under limit (video 5MB, audio/image 2MB)
+          if(m.type==='video')return {...m,src:(m.src&&m.src.startsWith('data:')&&m.src.length<5000000)?m.src:(m.src&&!m.src.startsWith('data:')?m.src:'[vid_lost]')};
+          if(m.type==='voice')return {...m,src:(m.src&&m.src.length<2000000)?m.src:'[voice_lost]'};
+          if(m.type==='image')return {...m,src:(m.src&&m.src.length<2000000)?m.src:'[img_lost]'};
+          return m;
         })
       };
     });
     try{localStorage.setItem('vst_groups',JSON.stringify(toSave));}
     catch(quota){
-      // Quota exceeded — keep sbUrl/http URLs only
+      // Quota exceeded — keep sbUrl and https URLs, strip base64
       const stripped=GROUPS.map(function(g){
         return {...g,messages:(g.messages||[]).map(function(m){
-          const safe=m.sbUrl||(m.src&&m.src.startsWith('http')?m.src:null);
-          if(safe)return {...m,src:safe,file:undefined};
-          return ['voice','image','video'].includes(m.type)?{...m,src:'[media]',file:undefined}:m;
+          if(m.sbUrl)return {...m,src:m.sbUrl};
+          if(m.src&&m.src.startsWith('http'))return m; // keep https URLs
+          return ['voice','image','video'].includes(m.type)?{...m,src:'[media]'}:m;
         })};
       });
       try{localStorage.setItem('vst_groups',JSON.stringify(stripped));}catch(e2){console.warn('Storage full:',e2);}
     }
-    // Supabase sync (group metadata only)
+    // Supabase sync (group metadata only, not messages)
     if(fbReady()){
       GROUPS.forEach(function(g){
         const memberIds=(g.members||[]).map(function(m){return m.id;});
@@ -3062,53 +3037,43 @@ function sendMediaPreview(){
   // Save current caption
   const mpCap=document.getElementById('mpCaption');
   MP.files[MP.idx].caption=mpCap?mpCap.value:'';
+  // Convert all blob URLs to base64 data URLs (persist across reload)
   const items=[...MP.files];
   closeMediaPreview();
-
+  let pending=items.length;
   items.forEach(function(item){
     const cap=item.caption||'';
     const urlMatch=cap.match(/(https?:\/\/[^\s]+)/);
-
-    // ── VIDEO: skip base64 entirely — pass file directly for Supabase upload ──
-    if(item.type==='video'){
-      // Warn if file exceeds Supabase free tier limit (50MB)
-      const fileSizeMB=item.file?(item.file.size/1024/1024):0;
-      if(fileSizeMB>50){
-        toast('⚠️ Video '+fileSizeMB.toFixed(0)+'MB — 50MB வரை மட்டுமே upload ஆகும். Supabase Pro plan-ல் அதிகம் upload செய்யலாம்.');
-      }
-      if(urlMatch){
-        pushMsg({type:'link',text:cap,linkUrl:urlMatch[1],linkTitle:'',linkDomain:'',
-          attachSrc:'',attachType:'video',attachName:(item.file&&item.file.name)||'video',
-          file:item.file||null,time:nowTime(),out:true,tick:'s'});
-      } else {
-        // Send with empty src + file object — pushMsg will upload and fill sbUrl
-        pushMsg({type:'video',src:'',sbUrl:'',name:(item.file&&item.file.name)||'video',
-          size:fmtSize((item.file&&item.file.size)||0),
-          dur:item.dur||'',text:cap,time:nowTime(),out:true,tick:'s',
-          file:item.file||null,
-          _uploading:true});
-      }
-      return; // skip base64 path below
-    }
-
-    // ── IMAGE: convert blob → base64 as before ──
+    // Convert blob URL → base64 via FileReader
     function doSend(dataUrl){
-      if(urlMatch){
-        pushMsg({type:'link',text:cap,linkUrl:urlMatch[1],linkTitle:'',linkDomain:'',
-          attachSrc:dataUrl,attachType:'image',attachName:(item.file&&item.file.name)||'image',
-          time:nowTime(),out:true,tick:'s'});
+      if(item.type==='image'){
+        if(urlMatch){
+          pushMsg({type:'link',text:cap,linkUrl:urlMatch[1],linkTitle:'',linkDomain:'',
+            attachSrc:dataUrl,attachType:'image',attachName:(item.file&&item.file.name)||'image',
+            time:nowTime(),out:true,tick:'s'});
+        } else {
+          pushMsg({type:'image',src:dataUrl,name:(item.file&&item.file.name)||'image',size:fmtSize((item.file&&item.file.size)||0),
+            text:cap,time:nowTime(),out:true,tick:'s'});
+        }
       } else {
-        pushMsg({type:'image',src:dataUrl,name:(item.file&&item.file.name)||'image',
-          size:fmtSize((item.file&&item.file.size)||0),
-          text:cap,time:nowTime(),out:true,tick:'s'});
+        if(urlMatch){
+          pushMsg({type:'link',text:cap,linkUrl:urlMatch[1],linkTitle:'',linkDomain:'',
+            attachSrc:dataUrl,attachType:'video',attachName:(item.file&&item.file.name)||'video',
+            time:nowTime(),out:true,tick:'s'});
+        } else {
+          pushMsg({type:'video',src:dataUrl,name:(item.file&&item.file.name)||'video',size:fmtSize((item.file&&item.file.size)||0),
+            dur:item.dur||'',text:cap,time:nowTime(),out:true,tick:'s'});
+        }
       }
     }
     if(item.file){
+      // FileReader → base64 data URL (survives reload, no blob URL expiry)
       const reader=new FileReader();
       reader.onloadend=()=>doSend(reader.result);
-      reader.onerror=()=>doSend(item.url);
+      reader.onerror=()=>doSend(item.url); // fallback to blob URL
       reader.readAsDataURL(item.file);
     } else if(item.url&&item.url.startsWith('blob:')){
+      // No file ref — fetch blob then convert
       fetch(item.url).then(r=>r.blob()).then(blob=>{
         const reader=new FileReader();
         reader.onloadend=()=>doSend(reader.result);
@@ -3283,48 +3248,13 @@ function pushMsg(msg){
   // ── Supabase: Save message + upload media for permanence ──
   (async function(){
     if(!fbReady())return;
-    const chatId=S.curChat&&S.curChat.id;
-    if(!chatId)return;
+    const chatId=S.curChat.id;
     const curChatRef=S.curChat;
-    let uploadUrl=null;
-
-    // ── PRIORITY 1: Video file object → upload directly (never use base64 for video) ──
-    if(msg.file&&(msg.type==='video'||msg.type==='link'&&msg.attachType==='video')){
+    let uploadUrl=msg.src||msg.attachSrc||null;
+    const mediaUrl=msg.src||msg.attachSrc;
+    // Upload base64 to Supabase Storage
+    if(mediaUrl&&mediaUrl.startsWith('data:')){
       try{
-        const uploaded=await fbUploadMedia(msg.file,'chats/'+chatId);
-        if(uploaded){
-          uploadUrl=uploaded;
-          const msgIdx=curChatRef.messages.findIndex(function(m){return m.id===msg.id;});
-          if(msgIdx>=0){
-            curChatRef.messages[msgIdx].sbUrl=uploaded;
-            curChatRef.messages[msgIdx].src=uploaded;
-            curChatRef.messages[msgIdx]._uploading=false;
-            delete curChatRef.messages[msgIdx].file;
-          }
-          // Sync to live arrays
-          if(curChatRef.type==='group'){
-            const grpInArray=GROUPS.find(function(g){return g.id===chatId;});
-            if(grpInArray){grpInArray.messages=curChatRef.messages;}
-            if(curChatRef.groupRef)curChatRef.groupRef.messages=curChatRef.messages;
-            saveGroups();
-          } else {
-            const pcInArr=PERSONAL_CHATS.find(function(p){return p.id===chatId||p.contactId===curChatRef.contactId;});
-            if(pcInArr)pcInArr.messages=curChatRef.messages;
-            savePersonalChats();
-          }
-          renderMsgs(curChatRef.messages);
-        } else {
-          // Upload failed — mark error
-          const msgIdx=curChatRef.messages.findIndex(function(m){return m.id===msg.id;});
-          if(msgIdx>=0){curChatRef.messages[msgIdx]._uploading=false;curChatRef.messages[msgIdx]._uploadFailed=true;}
-          renderMsgs(curChatRef.messages);
-        }
-      }catch(e){console.warn('Video upload:',e.message);}
-    }
-    // ── PRIORITY 2: Image/voice base64 → upload if data URL ──
-    else if((msg.src||msg.attachSrc)&&(msg.src||msg.attachSrc).startsWith('data:')){
-      try{
-        const mediaUrl=msg.src||msg.attachSrc;
         const res=await fetch(mediaUrl);
         const blob=await res.blob();
         const ext=blob.type.split('/')[1]||'bin';
@@ -3337,25 +3267,35 @@ function pushMsg(msg){
             curChatRef.messages[msgIdx].sbUrl=uploaded;
             curChatRef.messages[msgIdx].src=uploaded;
           }
+          // ✅ Also sync to groupRef so saveGroups() persists the sbUrl
           if(curChatRef.type==='group'){
             const grpInArray=GROUPS.find(function(g){return g.id===chatId;});
-            if(grpInArray)grpInArray.messages=curChatRef.messages;
-            if(curChatRef.groupRef)curChatRef.groupRef.messages=curChatRef.messages;
-            saveGroups();
+            if(grpInArray){
+              grpInArray.messages=curChatRef.messages;
+              if(curChatRef.groupRef)curChatRef.groupRef.messages=curChatRef.messages;
+            }
+            try{localStorage.setItem('vst_groups',JSON.stringify(GROUPS));}catch(e){}
           } else {
-            const pcInArr=PERSONAL_CHATS.find(function(p){return p.id===chatId||p.contactId===curChatRef.contactId;});
-            if(pcInArr)pcInArr.messages=curChatRef.messages;
             savePersonalChats();
           }
           renderMsgs(curChatRef.messages);
         }
-      }catch(e){console.warn('Media upload:',e.message);}
+      }catch(e){console.warn('Upload:',e.message);}
     }
-    // ── PRIORITY 3: Save to Supabase messages table ──
+    // Also upload msg.file if exists
+    if(msg.file&&fbReady()){
+      try{
+        const uploaded=await fbUploadMedia(msg.file,'chats/'+chatId);
+        if(uploaded){
+          uploadUrl=uploaded;
+          const msgIdx=curChatRef.messages.findIndex(function(m){return m.id===msg.id;});
+          if(msgIdx>=0){curChatRef.messages[msgIdx].sbUrl=uploaded;curChatRef.messages[msgIdx].src=uploaded;}
+          if(curChatRef.type==='personal')savePersonalChats();else saveGroups();
+        }
+      }catch(e){}
+    }
     try{
-      const finalSrc=(uploadUrl)||
-        (msg.src&&!msg.src.startsWith('data:')?msg.src:'')||
-        (msg.attachSrc&&!msg.attachSrc.startsWith('data:')?msg.attachSrc:'')||'';
+      const finalSrc=msg.src&&!msg.src.startsWith('data:')?msg.src:(uploadUrl||'');
       await sbClient.from('messages').insert({
         chat_id:chatId,
         sender_id:(S.session&&S.session.userId)||'me',
